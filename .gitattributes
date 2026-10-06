@@ -1,0 +1,43 @@
+* text=auto
+core.safecrlf=true
+core.autocrlf=true
+*.sh text eol=lf
+
+# These files require carriage return line feed (crlf)
+*.{cmd,[cC][mM][dD]}    text eol=crlf
+*.{bat,[bB][aA][tT]}    text eol=crlf
+#
+# The following files are binary and should be left untouched
+# (binary is a macro for -text -diff)
+#
+# Archive
+*.zip                   binary
+#
+# Documents
+*.chm                   binary
+*.doc                   binary
+*.docx                  binary
+*.pdf                   binary
+*.ppt                   binary
+*.pptx                  binary
+*.vsdx                  binary
+*.xls                   binary
+*.xlsx                  binary
+*.xmind                 binary
+#
+# Graphics
+*.{gif,[gG][iI][fF]}    binary
+*.{ico,[iI][cC][oO]}    binary
+*.{jpg,[jJ][pP][gG]}    binary
+*.{png,[pP][nN][gG]}    binary
+#
+# Other ccompiled files
+*.{lib,[lL][iI][bB]}	binary
+#
+# Windows specific binary files
+*.exe                   binary
+*.{dll,[dD][lL]}        binary
+*.pdb                   binary
+
+# Find potentially binary files that are not explicitly marked as binary
+#git ls-files --eol | grep i/-text | grep -vE '.zip|.chm|.doc|.docx|.pdf|.xls|.xlsx|.vsdx|.ppt|.pptx|.xmind|.gif|.ico|.jpg|.png|.PNG|.lib|.LIB|.exe|.dll|.pdb'
