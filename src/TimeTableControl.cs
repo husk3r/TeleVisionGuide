@@ -32,6 +32,7 @@ namespace TeleVisionGuide
         private Color _headerForeColor = Color.White;
         private Font _headerFont = new Font("Segoe UI", 14f, FontStyle.Bold);
         private Color _gridLineColor = Color.LightGray;
+        private readonly Dictionary<string, int> _columnIndexCache = new();
 
         public TimeTableControl()
         {
@@ -113,6 +114,7 @@ namespace TeleVisionGuide
             };
             _columns.Add(name);
             _columnInfos[name] = column;
+            _columnIndexCache[name] = _columns.Count - 1;
             UpdateLayout();
             return column;
         }
@@ -168,6 +170,7 @@ namespace TeleVisionGuide
             _entries.Clear();
             _columns.Clear();
             _columnInfos.Clear();
+            _columnIndexCache.Clear();
             ResumeLayout();
             UpdateLayout();
         }
@@ -183,14 +186,28 @@ namespace TeleVisionGuide
                 _headerHeight + RowCount * _rowHeight + 1);
 
             SuspendLayout();
+            int autoScrollX = AutoScrollPosition.X;
+            int autoScrollY = AutoScrollPosition.Y;
+            int headerHeightLocal = _headerHeight;
+            double pixelPerMin = PixelsPerMinute;
+            TimeSpan startTimeLocal = _startTime;
+
             foreach (var entry in _entries)
             {
-                int columnIndex = _columns.IndexOf(entry.Column);
-                int top = _headerHeight + (int)Math.Round((entry.Start - _startTime).TotalMinutes * PixelsPerMinute);
-                int height = Math.Max(1, (int)Math.Round(entry.Duration.TotalMinutes * PixelsPerMinute));
+                int columnIndex;
+                if (!_columnIndexCache.TryGetValue(entry.Column, out columnIndex))
+                {
+                    columnIndex = _columns.IndexOf(entry.Column);
+                    _columnIndexCache[entry.Column] = columnIndex;
+                }
+
+                int top = headerHeightLocal + (int)Math.Round((entry.Start - startTimeLocal).TotalMinutes * pixelPerMin);
+                int height = Math.Max(1, (int)Math.Round(entry.Duration.TotalMinutes * pixelPerMin));
+                int controlY = autoScrollY + top + 1;
+
                 entry.Control.Bounds = new Rectangle(
-                    AutoScrollPosition.X + _timeColumnWidth + columnIndex * _columnWidth + 1,
-                    AutoScrollPosition.Y + top + 1,
+                    autoScrollX + _timeColumnWidth + columnIndex * _columnWidth + 1,
+                    controlY,
                     _columnWidth - 1,
                     height - 1);
             }
@@ -205,51 +222,83 @@ namespace TeleVisionGuide
             Graphics g = e.Graphics;
             int offsetX = AutoScrollPosition.X;
             int offsetY = AutoScrollPosition.Y;
+            int headerOffsetY = offsetY;
             int totalWidth = _timeColumnWidth + _columns.Count * _columnWidth;
             int totalHeight = _headerHeight + RowCount * _rowHeight;
+            int colCount = _columns.Count;
+            int rowH = _rowHeight;
+            int colW = _columnWidth;
+            TimeSpan startTimeLocal = _startTime;
+            double pixPerMin = PixelsPerMinute;
 
             using var gridPen = new Pen(_gridLineColor);
             using var headerBrush = new SolidBrush(_headerBackColor);
+            Dictionary<Color, SolidBrush> brushCache = new();
 
-            for (int col = 0; col < _columns.Count; col++)
+            // Draw column backgrounds
+            for (int col = 0; col < colCount; col++)
             {
-                if (_columnInfos[_columns[col]].BackColor is Color columnBack)
+                var info = _columnInfos[_columns[col]];
+                if (info.BackColor is Color columnBack)
                 {
-                    using var brush = new SolidBrush(columnBack);
-                    g.FillRectangle(brush, offsetX + _timeColumnWidth + col * _columnWidth, offsetY + _headerHeight, _columnWidth, RowCount * _rowHeight);
+                    if (!brushCache.TryGetValue(columnBack, out var brush))
+                    {
+                        brush = new SolidBrush(columnBack);
+                        brushCache[columnBack] = brush;
+                    }
+                    g.FillRectangle(brush, offsetX + _timeColumnWidth + col * colW, offsetY + _headerHeight, colW, RowCount * rowH);
                 }
             }
 
-            for (int row = 0; row <= RowCount; row++)
+            // Draw grid lines for rows
+            int rowCount = RowCount;
+            for (int row = 0; row <= rowCount; row++)
             {
-                int y = offsetY + _headerHeight + row * _rowHeight;
+                int y = offsetY + _headerHeight + row * rowH;
                 g.DrawLine(gridPen, offsetX, y, offsetX + totalWidth, y);
 
-                if (row < RowCount)
+                if (row < rowCount)
                 {
-                    TimeSpan time = _startTime + _rowInterval * row;
-                    var timeRect = new Rectangle(offsetX, y, _timeColumnWidth, _rowHeight);
+                    TimeSpan time = startTimeLocal + _rowInterval * row;
+                    var timeRect = new Rectangle(offsetX, y, _timeColumnWidth, rowH);
                     TextRenderer.DrawText(g, $"{(int)time.TotalHours % 24:00}:{time.Minutes:00}", Font, timeRect, ForeColor,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
                 }
             }
 
-            for (int col = 0; col <= _columns.Count; col++)
+            // Draw grid lines for columns
+            for (int col = 0; col <= colCount; col++)
             {
-                int x = offsetX + _timeColumnWidth + col * _columnWidth;
+                int x = offsetX + _timeColumnWidth + col * colW;
                 g.DrawLine(gridPen, x, offsetY, x, offsetY + totalHeight);
             }
 
+            // Draw header on top - this is drawn AFTER child controls so it appears over them
             if (_headerHeight > 0)
             {
-                g.FillRectangle(headerBrush, offsetX, offsetY, totalWidth, _headerHeight);
-                for (int col = 0; col < _columns.Count; col++)
+                // Draw full header background (including time column area)
+                g.FillRectangle(headerBrush, offsetX, headerOffsetY, totalWidth, _headerHeight);
+
+                // Draw time column header area (if any)
+                if (_timeColumnWidth > 0)
+                {
+                    var timeHeaderRect = new Rectangle(offsetX, headerOffsetY, _timeColumnWidth, _headerHeight);
+                    TextRenderer.DrawText(g, "Time", _headerFont, timeHeaderRect, _headerForeColor,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+
+                // Draw column headers
+                for (int col = 0; col < colCount; col++)
                 {
                     var info = _columnInfos[_columns[col]];
-                    Rectangle headerRect = new Rectangle(offsetX + _timeColumnWidth + col * _columnWidth, offsetY, _columnWidth, _headerHeight);
+                    Rectangle headerRect = new Rectangle(offsetX + _timeColumnWidth + col * colW, headerOffsetY, colW, _headerHeight);
                     if (info.HeaderBackColor is Color columnHeaderBack)
                     {
-                        SolidBrush brush = new SolidBrush(columnHeaderBack);
+                        if (!brushCache.TryGetValue(columnHeaderBack, out var brush))
+                        {
+                            brush = new SolidBrush(columnHeaderBack);
+                            brushCache[columnHeaderBack] = brush;
+                        }
                         g.FillRectangle(brush, headerRect);
                     }
 
@@ -268,6 +317,21 @@ namespace TeleVisionGuide
                     TextRenderer.DrawText(g, _columns[col], _headerFont, textRect, _headerForeColor,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                 }
+
+                // Draw header grid lines
+                for (int col = 0; col <= colCount; col++)
+                {
+                    int x = offsetX + _timeColumnWidth + col * colW;
+                    g.DrawLine(gridPen, x, headerOffsetY, x, headerOffsetY + _headerHeight);
+                }
+                // Draw horizontal line at bottom of header
+                g.DrawLine(gridPen, offsetX, headerOffsetY + _headerHeight, offsetX + totalWidth, headerOffsetY + _headerHeight);
+            }
+
+            // Dispose cached brushes
+            foreach (var brush in brushCache.Values)
+            {
+                brush.Dispose();
             }
         }
 
