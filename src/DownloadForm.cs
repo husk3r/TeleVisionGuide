@@ -52,6 +52,7 @@ namespace TeleVisionGuide
             {
                 for (int i = 0; i < _items.Count; i++)
                 {
+
                     DownloadItem item = _items[i];
 
                     // Normalize addresses: if the provided URI is not absolute (no scheme),
@@ -69,7 +70,14 @@ namespace TeleVisionGuide
 
                     labelOverall.Text = $"File {i + 1} of {_items.Count}";
                     labelStatus.Text = $"Downloading {item.Source}";
-                    await DownloadFileAsync(item, token);
+                    try
+                    {
+                        await DownloadFileAsync(item, token);
+                    }
+                    catch(HttpRequestException http)
+                    {
+                        Console.WriteLine("failed");
+                    }
                     progressBarOverall.Value = i + 1;
                 }
 

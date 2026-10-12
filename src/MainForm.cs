@@ -17,9 +17,11 @@ namespace TeleVisionGuide
         private const string UpdateGlyph = "\uE895";
         private const string SettingsGlyph = "\uE713";
         private const string InfoGlyph = "\uE946";
-
+        // 11 days
+        private const int AvailableDaysInFuture = 10;
+        private const int AvailableDaysInPast = 2;
         private string _dataPath = null;
-        private T4aRoot _t4aRoot = null;
+        private Dictionary<DateTime, T4aRoot> _t4aBroadCasts = new Dictionary<DateTime, T4aRoot>();
         private T4aChannels _t4AChannels = null;
         private T4aGenres _t4aGenres = null;
 
@@ -88,8 +90,8 @@ namespace TeleVisionGuide
             daySelector.SelectedBackColor = HeaderAccentColor;
             daySelector.SelectedForeColor = HeaderSeparatorColor;
             daySelector.BorderColor = HeaderSeparatorColor;
-            daySelector.StartDate = DateTime.Today;
-            daySelector.DayCount = 10;
+            daySelector.StartDate = DateTime.Today.AddDays(-AvailableDaysInPast);
+            daySelector.DayCount = AvailableDaysInPast + AvailableDaysInFuture;
             daySelector.SelectedDate = DateTime.Today;
             daySelector.SelectedDateChanged += (s, e) => ShowData();
 
@@ -118,9 +120,9 @@ namespace TeleVisionGuide
             timeTable.Clear();
             timeTable.HeaderHeight = 64;
             timeTable.HeaderImageSize = new Size(48, 48);
-            timeTable.RowHeight = 100;
+            timeTable.RowHeight = 64;
 
-            if (_t4AChannels != null && _t4aRoot != null)
+            if (_t4AChannels != null && _t4aBroadCasts.ContainsKey(daySelector.SelectedDate))
             {
                 List<T4aChannel> orderedChannels = _t4AChannels.Channels.OrderBy(c => c.Order).ToList();
                 foreach (T4aChannel channel in orderedChannels)
@@ -130,8 +132,7 @@ namespace TeleVisionGuide
                     timeTable.AddColumn(channel.Name, logoImage);
                 }
 
-                List<T4aEvent> selectedDayEvents = _t4aRoot.Events.Where(e => e.StartTime >= daySelector.SelectedDate && e.StartTime < daySelector.SelectedDate.AddDays(1)).ToList();
-
+                T4aEvent[] selectedDayEvents = _t4aBroadCasts[daySelector.SelectedDate].Events;
                 timeTable.StartTime = selectedDayEvents.Min(m => m.StartTime.TimeOfDay);
                 timeTable.EndTime = selectedDayEvents.Max(m => m.EndTime.TimeOfDay);
 
@@ -207,10 +208,15 @@ namespace TeleVisionGuide
             return downloadLogoFiles.Select(s => new DownloadItem(new Uri($"https://tvfueralle.de/channel-logos/{Path.GetFileName(s)}"), s)).ToList();
         }
 
-        private static List<DownloadItem> GetEventImages(string eventImagePath, T4aRoot t4aRoot)
+        private static List<DownloadItem> GetEventImages(string eventImagePath, T4aRoot[] t4aBroadCasts)
         {
-            List<string> eventImageFiles = t4aRoot.Events.Where(w => w.Photo?.Url != null)
-                .Select(s => Path.Combine(eventImagePath, Path.GetFileName(s.Photo.Url))).ToList();
+            List<string> eventImageFiles = new List<string>();
+            foreach (T4aRoot t4aRoot in t4aBroadCasts)
+            {
+                eventImageFiles.AddRange(t4aRoot.Events.Where(w => w.Photo?.Url != null)
+                    .Select(s => Path.Combine(eventImagePath, Path.GetFileName(s.Photo.Url))));
+            }
+            eventImageFiles = eventImageFiles.Distinct().ToList();
             List<string> downloadImageFiles = eventImageFiles.Where(w => !File.Exists(w)).ToList();
             if (Directory.Exists(eventImagePath))
             {
@@ -251,13 +257,20 @@ namespace TeleVisionGuide
         {
             try
             {
-                _t4aRoot = T4aRoot.FromJson(File.ReadAllText(Path.Combine(GetDataPath(), "currentData.json")));
+                _t4aBroadCasts.Clear();
+                for (int i = -AvailableDaysInPast; i < AvailableDaysInFuture; i++)
+                {
+                    DateTime currentDate = DateTime.Today.AddDays(i);
+                    string date = $"{currentDate.Year}-{currentDate.Month}-{currentDate.Day}";
+                    string filePath = Path.Combine(GetDataPath(), $"{date}.json");
+                    if(File.Exists(filePath))
+                        _t4aBroadCasts.Add(currentDate, T4aRoot.FromJson(File.ReadAllText(filePath)));
+                }
                 _t4AChannels = T4aChannels.FromJson(File.ReadAllText(Path.Combine(GetDataPath(), "channels.json")));
                 // _t4aGenres = T4aGenres.FromJson(File.ReadAllText(Path.Combine(GetDataPath(), "genres.json")));
             }
             catch
             {
-                _t4aRoot = null;
                 _t4AChannels = null;
                 _t4aGenres = null;
             }
@@ -265,19 +278,33 @@ namespace TeleVisionGuide
 
         private void updateButton_Click(object sender, EventArgs e)
         {
-            List<DownloadItem> downloads = new List<DownloadItem>
+            List<DownloadItem> downloads = new List<DownloadItem>();
+
+            string channelPath = Path.Combine(GetDataPath(), "channels.json");
+            if (File.Exists(channelPath))
+                downloads.Add(new DownloadItem(new Uri("https://tvfueralle.de/api/channels"), channelPath));
+
+            string genresPath = Path.Combine(GetDataPath(), "genres.json");
+            if (File.Exists(genresPath))
+                downloads.Add(new DownloadItem(new Uri("https://tvfueralle.de/api/genres"), genresPath));
+
+            for (int i = -AvailableDaysInPast; i < AvailableDaysInFuture; i++)
             {
-                new DownloadItem(new Uri("https://tvfueralle.de/api/broadcasts/undefined"),  Path.Combine(GetDataPath(), "currentData.json")),
-                new DownloadItem(new Uri("https://tvfueralle.de/api/channels"),  Path.Combine(GetDataPath(), "channels.json")),
-                new DownloadItem(new Uri("https://tvfueralle.de/api/genres"),  Path.Combine(GetDataPath(), "genres.json"))
-            };
+                DateTime currentDate = DateTime.Today.AddDays(i);
+                string date = $"{currentDate.Year}-{currentDate.Month}-{currentDate.Day}";
+                string filePath = Path.Combine(GetDataPath(), $"{date}.json");
+                if (!File.Exists(filePath))
+                {
+                    downloads.Add(new DownloadItem(new Uri("https://tvfueralle.de/api/broadcasts/" + date), filePath));
+                }
+            }
             DownloadForm downloadForm = new DownloadForm(downloads);
             downloadForm.ShowDialog();
             LoadData();
-
+            downloads = new List<DownloadItem>();
             downloads.Clear();
             downloads.AddRange(GetChannelLogos(GetChannelLogoPath(), _t4AChannels));
-            downloads.AddRange(GetEventImages(GetEventImagePath(), _t4aRoot));
+            downloads.AddRange(GetEventImages(GetEventImagePath(), _t4aBroadCasts.Select(s => s.Value).ToArray()));
             downloadForm = new DownloadForm(downloads);
             downloadForm.ShowDialog();
             ShowData();

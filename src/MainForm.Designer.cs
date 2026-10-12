@@ -110,14 +110,15 @@ namespace TeleVisionGuide
             daySelector.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             daySelector.BorderColor = Color.LightGray;
             daySelector.DayBackColor = Color.WhiteSmoke;
+            daySelector.DayCount = 12;
             daySelector.HoverBackColor = Color.LightSteelBlue;
             daySelector.Location = new Point(369, 11);
             daySelector.Name = "daySelector";
             daySelector.SelectedBackColor = Color.SteelBlue;
-            daySelector.SelectedDate = new DateTime(2026, 10, 10, 0, 0, 0, 0);
+            daySelector.SelectedDate = new DateTime(2026, 10, 11, 0, 0, 0, 0);
             daySelector.SelectedForeColor = Color.White;
             daySelector.Size = new Size(720, 46);
-            daySelector.StartDate = new DateTime(2026, 10, 8, 0, 0, 0, 0);
+            daySelector.StartDate = new DateTime(2026, 10, 9, 0, 0, 0, 0);
             daySelector.TabIndex = 5;
             // 
             // timeTable
