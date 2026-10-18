@@ -8,8 +8,13 @@ namespace TeleVisionGuide
 
         private readonly IReadOnlyList<DownloadItem> _items;
         private CancellationTokenSource? _cts;
+        private const int MaxParallelDownloads = 10;
+        private int _completedDownloads = 0;
+        private int _failedDownloads = 0;
+        private readonly object _progressLock = new();
 
         public Exception? Error { get; private set; }
+
         private static HttpClient InitializeHttpClient()
         {
             HttpClient client = new HttpClient();
@@ -47,42 +52,49 @@ namespace TeleVisionGuide
             CancellationToken token = _cts.Token;
             progressBarOverall.Maximum = Math.Max(1, _items.Count);
             progressBarOverall.Value = 0;
+            _completedDownloads = 0;
+            _failedDownloads = 0;
 
             try
             {
-                for (int i = 0; i < _items.Count; i++)
+                // Normalize all URIs first
+                List<DownloadItem> normalizedItems = _items.Select(NormalizeDownloadItem).ToList();
+
+                // Download in batches of up to MaxParallelDownloads
+                for (int batchStart = 0; batchStart < normalizedItems.Count; batchStart += MaxParallelDownloads)
                 {
+                    int batchEnd = Math.Min(batchStart + MaxParallelDownloads, normalizedItems.Count);
+                    List<DownloadItem> batchItems = normalizedItems.Skip(batchStart).Take(batchEnd - batchStart).ToList();
 
-                    DownloadItem item = _items[i];
+                    labelOverall.Text = $"Files {batchStart + 1}-{batchEnd} of {normalizedItems.Count}";
 
-                    // Normalize addresses: if the provided URI is not absolute (no scheme),
-                    // assume HTTPS so users can provide addresses like "example.com/path".
-                    if (!item.Source.IsAbsoluteUri)
-                    {
-                        string original = item.Source.OriginalString;
-                        // Trim any leading slashes to avoid malformed URIs like https:///...
-                        string candidate = original.TrimStart('/');
-                        if (Uri.TryCreate("https://" + candidate, UriKind.Absolute, out Uri? httpsUri))
-                        {
-                            item = item with { Source = httpsUri };
-                        }
-                    }
+                    // Create download tasks for the current batch
+                    List<Task> downloadTasks = batchItems.Select((item, index) =>
+                        DownloadFileWithTrackingAsync(item, batchStart + index, normalizedItems.Count, token)
+                    ).ToList();
 
-                    labelOverall.Text = $"File {i + 1} of {_items.Count}";
-                    labelStatus.Text = $"Downloading {item.Source}";
+                    // Wait for all downloads in this batch to complete
                     try
                     {
-                        await DownloadFileAsync(item, token);
+                        await Task.WhenAll(downloadTasks);
                     }
-                    catch(HttpRequestException http)
+                    catch (Exception ex) when (!(ex is OperationCanceledException))
                     {
-                        Console.WriteLine("failed");
+                        // Continue with remaining batches even if some downloads fail
+                        Error = ex;
                     }
-                    progressBarOverall.Value = i + 1;
                 }
 
-                labelStatus.Text = "Download completed.";
-                DialogResult = DialogResult.OK;
+                if (_failedDownloads > 0)
+                {
+                    labelStatus.Text = $"Download completed with {_failedDownloads} error(s).";
+                    DialogResult = _completedDownloads > 0 ? DialogResult.OK : DialogResult.Abort;
+                }
+                else
+                {
+                    labelStatus.Text = "Download completed.";
+                    DialogResult = DialogResult.OK;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -99,8 +111,73 @@ namespace TeleVisionGuide
             {
                 CancellationTokenSource cts = _cts;
                 _cts = null;
-                cts.Dispose();
+                cts?.Dispose();
             }
+        }
+
+        private DownloadItem NormalizeDownloadItem(DownloadItem item)
+        {
+            // Normalize addresses: if the provided URI is not absolute (no scheme),
+            // assume HTTPS so users can provide addresses like "example.com/path".
+            if (!item.Source.IsAbsoluteUri)
+            {
+                string original = item.Source.OriginalString;
+                // Trim any leading slashes to avoid malformed URIs like https:///...
+                string candidate = original.TrimStart('/');
+                if (Uri.TryCreate("https://" + candidate, UriKind.Absolute, out Uri? httpsUri))
+                {
+                    item = item with { Source = httpsUri };
+                }
+            }
+            return item;
+        }
+
+        private async Task DownloadFileWithTrackingAsync(DownloadItem item, int itemIndex, int totalItems, CancellationToken token)
+        {
+            try
+            {
+                UpdateUIForDownload(itemIndex, item, totalItems);
+                await DownloadFileAsync(item, token);
+
+                lock (_progressLock)
+                {
+                    _completedDownloads++;
+                    progressBarOverall.Value = _completedDownloads + _failedDownloads;
+                }
+            }
+            catch (HttpRequestException http)
+            {
+                lock (_progressLock)
+                {
+                    _failedDownloads++;
+                    progressBarOverall.Value = _completedDownloads + _failedDownloads;
+                }
+                Console.WriteLine($"Failed to download {item.Source}: {http.Message}");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lock (_progressLock)
+                {
+                    _failedDownloads++;
+                    progressBarOverall.Value = _completedDownloads + _failedDownloads;
+                }
+                Console.WriteLine($"Error downloading {item.Source}: {ex.Message}");
+            }
+        }
+
+        private void UpdateUIForDownload(int itemIndex, DownloadItem item, int totalItems)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(() => UpdateUIForDownload(itemIndex, item, totalItems));
+                return;
+            }
+
+            labelStatus.Text = $"Downloading {item.Source}";
         }
 
         private async Task DownloadFileAsync(DownloadItem item, CancellationToken token)
@@ -142,7 +219,15 @@ namespace TeleVisionGuide
                         received += read;
                         if (totalBytes > 0)
                         {
-                            progressBarFile.Value = (int)Math.Min(100, received * 100 / totalBytes.Value);
+                            if (InvokeRequired)
+                            {
+                                int progress = (int)Math.Min(100, received * 100 / totalBytes.Value);
+                                Invoke(() => progressBarFile.Value = progress);
+                            }
+                            else
+                            {
+                                progressBarFile.Value = (int)Math.Min(100, received * 100 / totalBytes.Value);
+                            }
                         }
                     }
                 }
